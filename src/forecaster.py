@@ -1,13 +1,15 @@
 """
 Forecaster Module
-Uses Amazon Chronos-2 for time series forecasting of stock prices.
+Uses Amazon Chronos-2 via AWS Bedrock for time series forecasting of stock prices.
 """
 
-import torch
+import boto3
+import json
 import pandas as pd
 import numpy as np
 from typing import Optional, Tuple, List
 import logging
+import os
 from dataclasses import dataclass
 
 logging.basicConfig(level=logging.INFO)
@@ -32,80 +34,54 @@ class ForecastResult:
 
 class ChronosForecaster:
     """
-    Stock price forecaster using Amazon Chronos-2.
+    Stock price forecaster using Amazon Chronos-2 via AWS Bedrock.
     
-    Chronos-2 is a family of pretrained time series forecasting models
-    that can generate probabilistic forecasts for unseen time series.
+    Chronos-2 is Amazon's 120M parameter time series foundation model
+    hosted on AWS Bedrock for scalable, serverless inference.
+    
+    Required environment variables:
+        AWS_ACCESS_KEY_ID: Your AWS access key
+        AWS_SECRET_ACCESS_KEY: Your AWS secret key
+        AWS_REGION: AWS region (default: us-east-1)
     """
     
-    # Available Chronos-2 model sizes
-    MODEL_SIZES = {
-        'tiny': 'amazon/chronos-t5-tiny',
-        'mini': 'amazon/chronos-t5-mini', 
-        'small': 'amazon/chronos-t5-small',
-        'base': 'amazon/chronos-t5-base',
-        'large': 'amazon/chronos-t5-large',
-        # Chronos-2 models (Bolt series for faster inference)
-        'bolt-tiny': 'amazon/chronos-bolt-tiny',
-        'bolt-mini': 'amazon/chronos-bolt-mini',
-        'bolt-small': 'amazon/chronos-bolt-small',
-        'bolt-base': 'amazon/chronos-bolt-base',
-    }
+    # Bedrock model ID for Chronos-2
+    BEDROCK_MODEL_ID = "amazon.chronos-2"
     
     def __init__(
         self, 
-        model_size: str = 'bolt-small',
-        device: Optional[str] = None,
-        context_length: int = 64,
+        region: Optional[str] = None,
+        context_length: int = 512,
         prediction_length: int = 5
     ):
         """
-        Initialize the Chronos forecaster.
+        Initialize the Chronos forecaster with AWS Bedrock.
         
         Args:
-            model_size: Size of Chronos model to use
-            device: Device for inference ('cuda', 'cpu', or None for auto)
-            context_length: Number of historical points for context
+            region: AWS region for Bedrock (default from env or us-east-1)
+            context_length: Number of historical points for context (max 512)
             prediction_length: Number of days to forecast
         """
-        self.model_size = model_size
-        self.context_length = context_length
+        self.region = region or os.environ.get('AWS_REGION', 'us-east-1')
+        self.context_length = min(context_length, 512)  # Chronos-2 max context
         self.prediction_length = prediction_length
         
-        # Determine device
-        if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
-            self.device = device
-        
-        logger.info(f"Using device: {self.device}")
-        
-        self.model = None
-        self.pipeline = None
-        self._load_model()
+        self.client = None
+        self._initialize_client()
     
-    def _load_model(self):
-        """Load the Chronos model."""
+    def _initialize_client(self):
+        """Initialize the AWS Bedrock Runtime client."""
         try:
-            from chronos import ChronosPipeline
-            
-            model_id = self.MODEL_SIZES.get(self.model_size, self.model_size)
-            logger.info(f"Loading Chronos model: {model_id}")
-            
-            self.pipeline = ChronosPipeline.from_pretrained(
-                model_id,
-                device_map=self.device,
-                torch_dtype=torch.float32 if self.device == "cpu" else torch.bfloat16,
+            self.client = boto3.client(
+                'bedrock-runtime',
+                region_name=self.region,
+                aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+                aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY')
             )
-            
-            logger.info("Chronos model loaded successfully")
-            
-        except ImportError:
-            logger.warning("Chronos not installed. Using fallback forecaster.")
-            self.pipeline = None
+            logger.info(f"AWS Bedrock client initialized (region: {self.region})")
         except Exception as e:
-            logger.error(f"Error loading Chronos model: {e}")
-            self.pipeline = None
+            logger.warning(f"Failed to initialize Bedrock client: {e}")
+            self.client = None
     
     def forecast(
         self,
@@ -114,7 +90,7 @@ class ChronosForecaster:
         num_samples: int = 20
     ) -> ForecastResult:
         """
-        Generate probabilistic forecasts for a time series.
+        Generate probabilistic forecasts for a time series using Bedrock.
         
         Args:
             data: Historical price data (pandas Series with DatetimeIndex)
@@ -124,64 +100,96 @@ class ChronosForecaster:
         Returns:
             ForecastResult with point forecasts and uncertainty bounds
         """
-        if self.pipeline is None:
-            logger.warning("Using fallback forecaster (Chronos not available)")
+        if self.client is None:
+            logger.warning("Using fallback forecaster (Bedrock not available)")
             return self._fallback_forecast(data, ticker)
         
         # Prepare context data
-        context = data.iloc[-self.context_length:].values
-        context_tensor = torch.tensor(context, dtype=torch.float32)
+        context = data.iloc[-self.context_length:].values.tolist()
         
-        logger.info(f"Forecasting {ticker} with {len(context)} context points")
+        logger.info(f"Forecasting {ticker} with {len(context)} context points via Bedrock")
         
-        # Generate forecasts
-        with torch.no_grad():
-            forecast_samples = self.pipeline.predict(
-                context_tensor,
-                prediction_length=self.prediction_length,
-                num_samples=num_samples
+        try:
+            # Prepare request payload for Chronos-2 on Bedrock
+            request_body = {
+                "inferenceConfig": {
+                    "numSamples": num_samples
+                },
+                "forecast": {
+                    "targetTimeSeries": [
+                        {
+                            "values": context
+                        }
+                    ],
+                    "predictionLength": self.prediction_length
+                }
+            }
+            
+            # Call Bedrock
+            response = self.client.invoke_model(
+                modelId=self.BEDROCK_MODEL_ID,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(request_body)
             )
-        
-        # Convert to numpy
-        samples = forecast_samples.numpy()
-        
-        # Calculate statistics
-        point_forecast = samples.mean(axis=0)
-        median_forecast = np.median(samples, axis=0)
-        lower_bound = np.percentile(samples, 10, axis=0)
-        upper_bound = np.percentile(samples, 90, axis=0)
-        
-        # Generate forecast dates
-        last_date = data.index[-1]
-        forecast_dates = pd.date_range(
-            start=last_date + pd.Timedelta(days=1),
-            periods=self.prediction_length,
-            freq='B'  # Business days
-        )
-        
-        # Calculate expected return and volatility
-        last_price = data.iloc[-1]
-        expected_return = (median_forecast[-1] - last_price) / last_price
-        forecast_volatility = samples[:, -1].std() / last_price
-        
-        # Confidence score based on forecast uncertainty
-        confidence_score = self._calculate_confidence(
-            samples, last_price, expected_return
-        )
-        
-        return ForecastResult(
-            ticker=ticker,
-            forecast_dates=forecast_dates,
-            point_forecast=point_forecast,
-            lower_bound=lower_bound,
-            upper_bound=upper_bound,
-            median_forecast=median_forecast,
-            last_actual_price=last_price,
-            last_actual_date=last_date,
-            expected_return=expected_return,
-            forecast_volatility=forecast_volatility,
-            confidence_score=confidence_score
-        )
+            
+            # Parse response
+            response_body = json.loads(response['body'].read())
+            
+            # Extract forecast samples from response
+            forecasts = response_body.get('forecast', {}).get('predictions', [])
+            
+            if not forecasts:
+                logger.warning("Empty forecast response, using fallback")
+                return self._fallback_forecast(data, ticker)
+            
+            # Chronos returns samples for each time series
+            samples = np.array(forecasts[0].get('samples', []))
+            
+            if samples.ndim == 1:
+                samples = samples.reshape(1, -1)
+            
+            # Calculate statistics
+            point_forecast = samples.mean(axis=0)
+            median_forecast = np.median(samples, axis=0)
+            lower_bound = np.percentile(samples, 10, axis=0)
+            upper_bound = np.percentile(samples, 90, axis=0)
+            
+            # Generate forecast dates
+            last_date = data.index[-1]
+            forecast_dates = pd.date_range(
+                start=last_date + pd.Timedelta(days=1),
+                periods=self.prediction_length,
+                freq='B'  # Business days
+            )
+            
+            # Calculate expected return and volatility
+            last_price = data.iloc[-1]
+            expected_return = (median_forecast[-1] - last_price) / last_price
+            forecast_volatility = samples[:, -1].std() / last_price if samples.shape[0] > 1 else 0.02
+            
+            # Confidence score based on forecast uncertainty
+            confidence_score = self._calculate_confidence(
+                samples, last_price, expected_return
+            )
+            
+            return ForecastResult(
+                ticker=ticker,
+                forecast_dates=forecast_dates,
+                point_forecast=point_forecast,
+                lower_bound=lower_bound,
+                upper_bound=upper_bound,
+                median_forecast=median_forecast,
+                last_actual_price=last_price,
+                last_actual_date=last_date,
+                expected_return=expected_return,
+                forecast_volatility=forecast_volatility,
+                confidence_score=confidence_score
+            )
+            
+        except Exception as e:
+            logger.error(f"Bedrock API error: {e}")
+            return self._fallback_forecast(data, ticker)
     
     def _fallback_forecast(
         self, 
@@ -189,7 +197,7 @@ class ChronosForecaster:
         ticker: str
     ) -> ForecastResult:
         """
-        Simple fallback forecaster when Chronos is not available.
+        Simple fallback forecaster when Bedrock is not available.
         Uses exponential moving average and historical volatility.
         """
         logger.info(f"Using fallback forecast for {ticker}")
@@ -258,6 +266,9 @@ class ChronosForecaster:
         - Direction consistency across samples
         - Magnitude of expected move
         """
+        if samples.shape[0] < 2:
+            return 0.5
+            
         final_prices = samples[:, -1]
         
         # Direction consistency: what fraction of samples agree on direction?
@@ -309,11 +320,9 @@ if __name__ == "__main__":
     fetcher = DataFetcher(lookback_days=180)
     data = fetcher.fetch_stock_data('AAPL')
     
-    # Create forecaster (will use fallback if Chronos not installed)
-    forecaster = ChronosForecaster(
-        model_size='bolt-small',
-        prediction_length=5
-    )
+    # Create forecaster (requires AWS credentials)
+    # Set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION env vars
+    forecaster = ChronosForecaster(prediction_length=5)
     
     # Generate forecast
     result = forecaster.forecast(data['Close'], 'AAPL')

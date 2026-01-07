@@ -1,13 +1,13 @@
 # 🚀 Mock Stock Trading System
 
-A mock stock trading system powered by Amazon Chronos-2 for time series forecasting, with a cloud-hosted Streamlit dashboard for performance visualization.
+A mock stock trading system powered by Amazon Chronos-2 (via AWS Bedrock) for time series forecasting, with a modern React dashboard deployed on Vercel.
 
 ## Overview
 
 This system implements a complete mock trading pipeline:
 
 1. **Data Fetching** - Retrieves up to 1 year of historical stock data via yfinance
-2. **Forecasting** - Uses Chronos-2 (Amazon's pretrained time series model) to predict future prices
+2. **Forecasting** - Uses Chronos-2 (120M params) on AWS Bedrock to predict future prices
 3. **Signal Generation** - Classifies forecasts as BUY/SELL/HOLD with position sizing
 4. **Trade Execution** - Executes mock trades and tracks portfolio metrics
 5. **Backtesting** - Evaluates historical strategy performance
@@ -16,76 +16,111 @@ This system implements a complete mock trading pipeline:
 
 ```
 mock-trading-system/
+├── api/
+│   └── index.py           # FastAPI backend (Vercel serverless)
+├── frontend/
+│   ├── src/
+│   │   ├── App.jsx        # React dashboard
+│   │   └── index.css      # Terminal-style CSS
+│   ├── package.json       # Frontend dependencies
+│   └── vite.config.js     # Vite configuration
 ├── src/
 │   ├── data_fetcher.py    # Stock data retrieval (yfinance)
-│   ├── forecaster.py      # Chronos-2 time series forecasting
+│   ├── forecaster.py      # AWS Bedrock Chronos-2 integration
 │   ├── strategy.py        # Trading signals & position sizing
 │   ├── portfolio.py       # Portfolio management & P&L tracking
-│   ├── backtester.py      # Historical strategy evaluation
-│   └── dashboard.py       # Streamlit web dashboard
+│   └── backtester.py      # Historical strategy evaluation
 ├── tests/
 │   └── test_*.py          # Unit tests
-├── data/                  # Data storage (gitignored)
-├── notebooks/             # Jupyter notebooks for exploration
-├── .streamlit/
-│   └── config.toml        # Streamlit configuration
-├── requirements.txt       # Python dependencies
-└── README.md
+├── vercel.json            # Vercel deployment config
+└── requirements.txt       # Python dependencies
 ```
 
 ## 🚀 Quick Start
 
-### Local Installation
+### Prerequisites
+
+1. **AWS Account** with Bedrock access
+2. **Node.js** 18+ for frontend development
+3. **Python** 3.11+ for backend
+
+### AWS Bedrock Setup
+
+1. Enable Chronos-2 model access in AWS Bedrock console
+2. Create IAM credentials with Bedrock invoke permissions
+3. Set environment variables:
+
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION="us-east-1"
+```
+
+### Local Development
 
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/mock-trading-system.git
 cd mock-trading-system
 
-# Create virtual environment
+# Backend setup
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+source venv/bin/activate
 pip install -r requirements.txt
 
-# Run the dashboard
-streamlit run src/dashboard.py
+# Start FastAPI backend
+uvicorn api.index:app --reload --port 8000
+
+# Frontend setup (new terminal)
+cd frontend
+npm install
+npm run dev
 ```
 
-### Docker
+Dashboard available at `http://localhost:5173`
 
+## ☁️ Vercel Deployment
+
+### One-Click Deploy
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/yourusername/mock-trading-system)
+
+### Manual Deployment
+
+1. Install Vercel CLI:
 ```bash
-# Build the image
-docker build -t mock-trading .
-
-# Run the container
-docker run -p 8501:8501 mock-trading
+npm i -g vercel
 ```
 
-## ☁️ Cloud Deployment (Streamlit Cloud)
+2. Add secrets (one-time):
+```bash
+vercel secrets add aws_access_key_id "your-access-key"
+vercel secrets add aws_secret_access_key "your-secret-key"
+vercel secrets add aws_region "us-east-1"
+```
 
-1. Fork this repository to your GitHub account
-2. Go to [Streamlit Cloud](https://streamlit.io/cloud)
-3. Click "New app" and connect your GitHub repository
-4. Set the main file path to `src/dashboard.py`
-5. Deploy!
+3. Deploy:
+```bash
+vercel --prod
+```
 
-Your dashboard will be available at `https://your-app-name.streamlit.app`
+Your dashboard will be available at `https://your-project.vercel.app`
 
 ## 📊 Features
 
 ### Data Fetching
 - Fetches OHLCV data from Yahoo Finance
+- **Daily granularity** (1d intervals)
 - Up to 1 year lookback period
 - Automatic computation of technical indicators (SMA, RSI, volatility)
 - Market benchmark data (SPY) for beta calculations
 
-### Forecasting with Chronos-2
-- Pretrained transformer-based time series model
+### Forecasting with Chronos-2 on AWS Bedrock
+- **120M parameter** foundation model for time series
 - Probabilistic forecasts with confidence intervals
-- Multiple model sizes available (tiny to large)
-- Bolt variants for faster inference
+- Serverless, scalable inference via AWS Bedrock
+- Up to 512 context points for better predictions
+- Automatic fallback to statistical model if Bedrock unavailable
 
 ### Trading Strategy
 - Signal classification based on expected returns
@@ -106,16 +141,50 @@ Your dashboard will be available at `https://your-app-name.streamlit.app`
   - Maximum drawdown
   - Win rate
   - Alpha and beta
-- Downloadable reports
 
-## 📈 Dashboard Tabs
+## 🖥️ Dashboard
 
-| Tab | Description |
-|-----|-------------|
-| **Overview** | Portfolio composition, positions, and key metrics |
-| **Forecasts** | Generate Chronos-2 forecasts for individual stocks |
-| **Backtest** | Run historical backtests and view performance |
-| **Analytics** | Risk metrics, rolling performance, correlation analysis |
+The React dashboard features a terminal-inspired design with:
+
+| Section | Description |
+|---------|-------------|
+| **Forecast Panel** | Generate Chronos-2 forecasts with confidence intervals |
+| **Signal Panel** | View BUY/SELL/HOLD recommendations with reasoning |
+| **Portfolio Panel** | Track positions, P&L, and portfolio metrics |
+| **Trade Panel** | Execute mock trades by shares or dollar amount |
+
+## 🔌 API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Health check |
+| `/api/stock/{ticker}` | GET | Fetch historical data |
+| `/api/forecast` | POST | Generate Chronos-2 forecast |
+| `/api/signal/{ticker}` | GET | Get trading signal |
+| `/api/portfolio` | GET | Get portfolio state |
+| `/api/trade` | POST | Execute mock trade |
+| `/api/backtest` | POST | Run backtest simulation |
+
+### Example: Generate Forecast
+
+```bash
+curl -X POST https://your-app.vercel.app/api/forecast \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "AAPL", "horizon": 5}'
+```
+
+Response:
+```json
+{
+  "ticker": "AAPL",
+  "last_price": 185.50,
+  "expected_return": 0.023,
+  "confidence_score": 0.72,
+  "forecasts": [
+    {"date": "2024-01-15", "point": 186.20, "lower": 183.10, "upper": 189.30}
+  ]
+}
+```
 
 ## ⚙️ Configuration
 
@@ -130,14 +199,13 @@ Your dashboard will be available at `https://your-app-name.streamlit.app`
 | `risk_per_trade` | 2% | Risk budget per trade |
 | `kelly_fraction` | 0.25 | Fraction of Kelly optimal to use |
 
-### Backtest Settings
+### AWS Bedrock Settings
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `initial_capital` | $100,000 | Starting portfolio value |
-| `rebalance_frequency` | weekly | Trading frequency |
-| `transaction_cost` | 0.1% | Cost per trade |
-| `slippage` | 0.05% | Assumed slippage |
+| Environment Variable | Description |
+|---------------------|-------------|
+| `AWS_ACCESS_KEY_ID` | AWS access key |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key |
+| `AWS_REGION` | AWS region (default: us-east-1) |
 
 ## 🧪 Testing
 
@@ -149,9 +217,7 @@ pytest tests/ -v
 pytest tests/ --cov=src --cov-report=html
 ```
 
-## 📦 API Usage
-
-### Basic Example
+## 📦 Python API Usage
 
 ```python
 from src.data_fetcher import DataFetcher
@@ -161,7 +227,7 @@ from src.portfolio import Portfolio
 
 # Initialize components
 fetcher = DataFetcher(lookback_days=180)
-forecaster = ChronosForecaster(model_size='bolt-small')
+forecaster = ChronosForecaster()  # Uses AWS Bedrock
 strategy = TradingStrategy()
 portfolio = Portfolio(initial_capital=100000)
 
@@ -170,61 +236,24 @@ data = fetcher.fetch_stock_data('AAPL')
 forecast = forecaster.forecast(data['Close'], 'AAPL')
 
 # Generate trading signal
-signal = strategy.generate_signal(
-    forecast=forecast,
-    portfolio_value=portfolio.total_value
-)
+signal = strategy.generate_signal(forecast)
 
-# Execute trade
-if signal.signal.value == 'BUY':
-    portfolio.execute_trade(signal, current_price=data['Close'].iloc[-1])
-
-print(f"Portfolio value: ${portfolio.total_value:,.2f}")
+print(f"Signal: {signal.action.value}")
+print(f"Expected Return: {forecast.expected_return:.2%}")
+print(f"Confidence: {forecast.confidence_score:.0%}")
 ```
 
-### Running a Backtest
+## 💰 Cost Considerations
 
-```python
-from src.backtester import Backtester, BacktestConfig
+AWS Bedrock pricing for Chronos-2:
+- Pay per inference request
+- No idle costs (serverless)
+- See [AWS Bedrock Pricing](https://aws.amazon.com/bedrock/pricing/) for current rates
 
-config = BacktestConfig(
-    start_date='2024-01-01',
-    end_date='2024-06-30',
-    tickers=['AAPL', 'MSFT', 'GOOGL'],
-    initial_capital=100000,
-    rebalance_frequency='weekly'
-)
-
-backtester = Backtester()
-result = backtester.run_backtest(config)
-
-print(f"Total Return: {result.performance_metrics['total_return']:.2%}")
-print(f"Sharpe Ratio: {result.performance_metrics['sharpe_ratio']:.2f}")
-```
-
-## 🔧 Development
-
-### Adding New Forecasting Models
-
-Extend the `ChronosForecaster` class or create a new forecaster implementing:
-
-```python
-class CustomForecaster:
-    def forecast(self, data: pd.Series, ticker: str) -> ForecastResult:
-        # Your implementation
-        pass
-```
-
-### Adding New Strategies
-
-Extend the `TradingStrategy` class:
-
-```python
-class MomentumStrategy(TradingStrategy):
-    def _classify_signal(self, expected_return, confidence, volatility):
-        # Custom signal logic
-        pass
-```
+To minimize costs:
+- Use the fallback forecaster for development/testing
+- Implement caching for repeated forecasts
+- Batch multiple ticker forecasts when possible
 
 ## ⚠️ Disclaimer
 
@@ -249,7 +278,8 @@ MIT License - see LICENSE file for details.
 
 ## 📚 References
 
+- [Amazon Chronos-2 on AWS Bedrock](https://aws.amazon.com/bedrock/)
 - [Chronos: Learning the Language of Time Series](https://arxiv.org/abs/2403.07815)
-- [Amazon Chronos GitHub](https://github.com/amazon-science/chronos-forecasting)
 - [yfinance Documentation](https://github.com/ranaroussi/yfinance)
-- [Streamlit Documentation](https://docs.streamlit.io)
+- [Vercel Documentation](https://vercel.com/docs)
+- [FastAPI Documentation](https://fastapi.tiangolo.com/)
